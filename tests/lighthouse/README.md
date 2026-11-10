@@ -143,10 +143,19 @@ playwright/node versions) lives in the JSON reports and `summary.json`.
 
 ### Sanitisation
 
-Before artifacts are produced, every report file is scrubbed of cluster
-credentials (kubeconfig token, client cert/key and CA data, and the serialized
-cluster state) so no secret from `fixtures/kubeconfig.yaml` can leak into an
-uploaded report.
+Credentials must never reach a CI artifact. This is enforced in three layers:
+
+1. Every file under `test-results/lighthouse-performance/` is scrubbed of
+   cluster credentials (kubeconfig token, client cert/key and CA data, and the
+   serialized cluster state) — this runs in a `finally` block, so even a
+   partial/failed run is sanitized before upload.
+2. After scrubbing, the suite asserts no credential survived in any report
+   file (`assertNoSecrets`); a redaction gap **fails the run** instead of
+   leaking.
+3. Playwright tracing is disabled (`trace: 'off'`) and the CI workflow uploads
+   only the report directories — never the Playwright per-test output. A
+   `trace.zip` is a compressed archive that string-based scrubbing cannot
+   reach, so it is kept out of artifacts entirely rather than sanitized.
 
 ## Troubleshooting
 

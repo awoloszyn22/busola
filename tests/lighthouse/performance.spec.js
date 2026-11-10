@@ -16,6 +16,7 @@ import {
   buildSummary,
   writeSummary,
   sanitizeReports,
+  assertNoSecrets,
 } from './lib/report.js';
 
 const require = createRequire(import.meta.url);
@@ -209,6 +210,15 @@ test('Busola performance audits (clusters + cluster overview)', async () => {
   const authState = await captureAuthState();
   const clusterName = authState.current;
 
+  // Credentials to scrub from every emitted report before it becomes an
+  // artifact. Built before the audit loop so sanitization can run in the
+  // `finally` below even when a sample throws mid-run.
+  const secrets = [
+    authState.clusters,
+    kubeconfigRaw,
+    ...collectKubeconfigSecrets(kubeconfigRaw),
+  ];
+
   const settings = {
     ...PERF_SETTINGS,
     disableStorageReset: true,
@@ -250,61 +260,59 @@ test('Busola performance audits (clusters + cluster overview)', async () => {
     },
   ];
 
-  const pages = [];
-  for (const def of pageDefs) {
-    const samples = [];
-    for (let i = 0; i < SAMPLES; i++) {
-      // eslint-disable-next-line no-await-in-loop -- samples are intentionally serial
-      const metrics = await runSample({
-        ...def,
-        index: i,
-        authState,
-        lhVersionRef,
-      });
-      samples.push(metrics);
-      const sampleReport = buildSampleReport({
-        name: def.name,
-        url: def.url,
-        index: i + 1,
-        revision: resolveRevision(process.env),
-        toolVersions: toolVersions(lhVersionRef.value),
-        settings,
-        metrics,
-      });
-      fs.writeFileSync(
-        path.join(REPORT_DIR, `${def.name}-sample-${i + 1}.sample.json`),
-        JSON.stringify(sampleReport, null, 2),
-      );
+  try {
+    const pages = [];
+    for (const def of pageDefs) {
+      const samples = [];
+      for (let i = 0; i < SAMPLES; i++) {
+        // eslint-disable-next-line no-await-in-loop -- samples are intentionally serial
+        const metrics = await runSample({
+          ...def,
+          index: i,
+          authState,
+          lhVersionRef,
+        });
+        samples.push(metrics);
+        const sampleReport = buildSampleReport({
+          name: def.name,
+          url: def.url,
+          index: i + 1,
+          revision: resolveRevision(process.env),
+          toolVersions: toolVersions(lhVersionRef.value),
+          settings,
+          metrics,
+        });
+        fs.writeFileSync(
+          path.join(REPORT_DIR, `${def.name}-sample-${i + 1}.sample.json`),
+          JSON.stringify(sampleReport, null, 2),
+        );
+      }
+      pages.push(buildPageReport({ name: def.name, url: def.url, samples }));
     }
-    pages.push(buildPageReport({ name: def.name, url: def.url, samples }));
-  }
 
-  const summary = buildSummary({
-    revision: resolveRevision(process.env),
-    toolVersions: toolVersions(lhVersionRef.value),
-    settings,
-    pages,
-    generatedAt: new Date().toISOString(),
-  });
-  writeSummary(summary, path.join(REPORT_DIR, 'summary.json'));
+    const summary = buildSummary({
+      revision: resolveRevision(process.env),
+      toolVersions: toolVersions(lhVersionRef.value),
+      settings,
+      pages,
+      generatedAt: new Date().toISOString(),
+    });
+    writeSummary(summary, path.join(REPORT_DIR, 'summary.json'));
 
-  // Scrub cluster credentials from every report before it becomes an artifact.
-  sanitizeReports({
-    directory: REPORT_DIR,
-    secrets: [
-      authState.clusters,
-      kubeconfigRaw,
-      ...collectKubeconfigSecrets(kubeconfigRaw),
-    ],
-  });
-
-  // Guard: a valid result must have both pages, exactly SAMPLES samples each,
-  // and finite medians for every reported metric.
-  expect(summary.pages).toHaveLength(2);
-  for (const reportedPage of summary.pages) {
-    expect(reportedPage.samples).toHaveLength(SAMPLES);
-    for (const key of METRIC_KEYS) {
-      expect(Number.isFinite(reportedPage.median[key])).toBe(true);
+    // Guard: a valid result must have both pages, exactly SAMPLES samples each,
+    // and finite medians for every reported metric.
+    expect(summary.pages).toHaveLength(2);
+    for (const reportedPage of summary.pages) {
+      expect(reportedPage.samples).toHaveLength(SAMPLES);
+      for (const key of METRIC_KEYS) {
+        expect(Number.isFinite(reportedPage.median[key])).toBe(true);
+      }
     }
+  } finally {
+    // Always scrub — a partial/failed run is still uploaded (CI uses
+    // `if: always()`), so sanitization must not depend on the happy path.
+    sanitizeReports({ directory: REPORT_DIR, secrets });
+    // Fail the run if any credential survived redaction in an uploaded report.
+    assertNoSecrets({ directory: REPORT_DIR, secrets });
   }
 });

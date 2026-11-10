@@ -121,3 +121,23 @@ export const sanitizeReports = ({ directory, secrets }) => {
   }
   return modified;
 };
+
+// Regression guard: throw if any file under `directory` still contains any of
+// the given secret strings. Run after sanitizeReports over the exact tree that
+// will be uploaded, so a redaction gap fails the run instead of leaking.
+export const assertNoSecrets = ({ directory, secrets }) => {
+  const active = (secrets || []).filter(
+    (secret) => typeof secret === 'string' && secret.trim() !== '',
+  );
+  if (active.length === 0) {
+    return;
+  }
+  for (const file of listFiles(directory)) {
+    const content = fs.readFileSync(file, 'utf8');
+    for (const secret of active) {
+      if (content.includes(secret)) {
+        throw new Error(`secret leaked into report file: ${file}`);
+      }
+    }
+  }
+};

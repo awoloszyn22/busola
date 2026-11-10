@@ -9,6 +9,7 @@ import {
   buildPageReport,
   buildSummary,
   sanitizeReports,
+  assertNoSecrets,
 } from './report.js';
 
 describe('resolveRevision', () => {
@@ -97,5 +98,24 @@ describe('sanitizeReports', () => {
     const a = fs.readFileSync(path.join(dir, 'a.json'), 'utf8');
     expect(a).not.toContain('SECRET123');
     expect(a).toContain('***REDACTED***');
+  });
+});
+
+describe('assertNoSecrets', () => {
+  let dir;
+  afterEach(() => dir && fs.rmSync(dir, { recursive: true, force: true }));
+  it('throws when a file still contains a secret', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nosec-'));
+    fs.writeFileSync(path.join(dir, 'leak.json'), '{"k":"SECRET123"}');
+    expect(() =>
+      assertNoSecrets({ directory: dir, secrets: ['SECRET123'] }),
+    ).toThrow(/SECRET123|leak\.json/);
+  });
+  it('passes when no file contains any secret', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nosec-'));
+    fs.writeFileSync(path.join(dir, 'clean.json'), '{"k":"***REDACTED***"}');
+    expect(() =>
+      assertNoSecrets({ directory: dir, secrets: ['SECRET123', '', '  '] }),
+    ).not.toThrow();
   });
 });

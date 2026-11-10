@@ -104,8 +104,12 @@ jobs:
         if: ${{ always() }}
         with:
           name: playwright-${{ github.job }}
+          # Only the sanitized report directories. Playwright per-test output
+          # (e.g. trace.zip) is deliberately excluded: it can contain the
+          # cluster kubeconfig/bearer token and is not sanitizable.
           path: |
-            tests/lighthouse/test-results/
+            tests/lighthouse/test-results/lighthouse-performance/
+            tests/lighthouse/test-results/lighthouse-reports/
           retention-days: 30
       - name: Upload Busola logs
         uses: actions/upload-artifact@v7
